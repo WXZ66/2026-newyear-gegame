@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>元旦：年兽大作战</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a2e; /* 深蓝夜空 */
+            touch-action: none; 
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas { display: block; }
+        
+        /* UI 层 */
+        #ui-layer {
+            position: absolute; top: 10px; left: 10px;
+            color: #FFD700; font-size: 20px; font-weight: bold;
+            text-shadow: 2px 2px 0 #000; pointer-events: none; z-index: 10;
+        }
+        
+        /* BOSS 血条 */
+        #boss-hp-container {
+            display: none; position: absolute; top: 50px; left: 10%;
+            width: 80%; height: 20px;
+            border: 3px solid #FFD700; background: #000;
+            border-radius: 10px; overflow: hidden; z-index: 10;
+        }
+        #boss-hp-fill {
+            width: 100%; height: 100%; background: #ff0000;
+            transition: width 0.2s, background-color 0.2s;
+        }
+
+        /* 屏幕遮罩 (开始/结束) */
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            text-align: center; color: white; z-index: 20;
+            background: rgba(0, 0, 0, 0.85);
+        }
+        #end-screen { display: none; }
+        
+        h1 {
+            font-size: 40px; color: #FFD700; margin-bottom: 20px;
+            text-shadow: 4px 4px 0 #c70000;
+            animation: pulse 1s infinite alternate;
+        }
+        p { font-size: 18px; line-height: 1.6; color: #fff; }
+        
+        .btn {
+            padding: 15px 40px; border: 4px solid #FFD700; background: #c70000;
+            color: #FFD700; font-size: 24px; font-weight: bold;
+            margin-top: 30px; cursor: pointer; border-radius: 8px;
+            box-shadow: 0 6px #500000;
+        }
+        .btn:active { box-shadow: 0 2px #500000; transform: translateY(4px); }
+
+        @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.05); } }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">得分: <span id="score">0</span></div>
+    
+    <div id="boss-hp-container">
+        <div id="boss-hp-fill"></div>
+    </div>
+
+    <div id="start-screen" class="screen">
+        <h1>🧨 小葛老师特别版年兽大作战 🧨</h1>
+        <p>
+            拖动 <span style="color:#ff4d4d">红灯笼</span> 躲避火球<br>
+            用 <span style="color:#ffff00">鞭炮</span> 击退年兽<br>
+            <br>BOSS半血后会暴走，小心！
+        </p>
+        <button class="btn" onclick="startGame()">开始迎新</button>
+    </div>
+
+    <div id="end-screen" class="screen">
+        <h1>🎊 小葛老师元旦快乐! 🎊</h1>
+        <p style="font-size: 22px; color: #FFD700;">2026 新年大吉</p>
+        <p>岁岁常欢愉，年年皆胜意</p>
+        <button class="btn" onclick="location.reload()">再来一局</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // 适配屏幕
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    // --- 游戏像素素材定义 (0=空, 1=主色, 2=副色, 3=高光) ---
+    const SPRITES = {
+        // 灯笼 (玩家)
+        lantern: {
+            w: 10, h: 10, scale: 4,
+            map: [
+                [0,0,2,2,2,2,2,0,0,0],
+                [0,2,1,1,1,1,1,2,0,0],
+                [2,1,1,1,1,1,1,1,2,0],
+                [2,1,1,1,1,1,1,1,2,0],
+                [2,1,1,3,1,1,3,1,2,0],
+                [2,1,1,1,1,1,1,1,2,0],
+                [0,2,1,1,1,1,1,2,0,0],
+                [0,0,2,2,2,2,2,0,0,0],
+                [0,0,0,2,0,2,0,0,0,0],
+                [0,0,0,2,0,2,0,0,0,0]
+            ],
+            colors: { 1: '#ff0000', 2: '#FFD700', 3: '#ffaaaa' } // 红, 金, 粉
+        },
+        // 鞭炮 (子弹)
+        firecracker: {
+            w: 4, h: 8, scale: 3,
+            map: [
+                [0,3,0,0],
+                [0,3,0,0],
+                [2,2,2,2],
+                [1,1,1,1],
+                [1,1,1,1],
+                [1,1,1,1],
+                [1,1,1,1],
+                [2,2,2,2]
+            ],
+            colors: { 1: '#ff0000', 2: '#ffcc00', 3: '#cccccc' }
+        },
+        // 小年兽 (敌人)
+        nianSmall: {
+            w: 11, h: 8, scale: 4,
+            map: [
+                [0,0,1,0,0,0,1,0,0,0,0],
+                [0,1,1,1,1,1,1,1,0,0,2],
+                [1,1,3,1,1,1,3,1,1,0,2],
+                [1,1,3,1,1,1,3,1,1,0,2],
+                [1,1,1,1,2,1,1,1,1,2,2],
+                [0,1,2,2,2,2,2,1,1,0,0],
+                [0,1,0,0,0,0,0,1,0,0,0],
+                [0,2,0,0,0,0,0,2,0,0,0]
+            ],
+            colors: { 1: '#00ccaa', 2: '#FFD700', 3: '#000000' } // 青, 金, 黑
+        },
+        // 大年兽 (BOSS)
+        nianBig: {
+            w: 16, h: 12, scale: 6, // 更大
+            map: [
+                [0,0,2,0,0,0,0,0,0,0,0,2,0,0,0,0],
+                [0,2,1,2,0,3,3,3,3,0,2,1,2,0,0,0],
+                [2,1,1,1,2,3,3,3,3,2,1,1,1,2,0,4],
+                [2,1,4,4,1,1,1,1,1,1,4,4,1,2,0,4],
+                [2,1,4,0,1,1,1,1,1,1,0,4,1,2,4,4],
+                [2,1,1,1,1,1,2,2,1,1,1,1,1,2,4,0],
+                [0,2,1,1,1,2,0,0,2,1,1,1,2,0,0,0],
+                [0,0,2,2,2,2,0,0,2,2,2,2,0,0,0,0],
+                [0,0,3,3,3,3,3,3,3,3,3,3,0,0,0,0],
+                [0,1,1,0,0,0,0,0,0,0,0,1,1,0,0,0],
+                [1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0],
+                [2,2,0,0,0,0,0,0,0,0,0,0,2,2,0,0]
+            ],
+            colors: { 1: '#ff0000', 2: '#FFD700', 3: '#ffffff', 4: '#000000' } // 红, 金, 白, 黑
+        },
+        // 火球
+        fireball: {
+            w: 5, h: 7, scale: 3,
+            map: [
+                [0,1,1,1,0],
+                [1,2,2,2,1],
+                [1,2,3,2,1],
+                [0,1,2,1,0],
+                [0,0,1,0,0],
+                [0,0,1,0,0],
+                [0,0,2,0,0]
+            ],
+            colors: { 1: '#ff4400', 2: '#ffff00', 3: '#ffffff' }
+        }
+    };
+
+    // --- 游戏变量 ---
+    let gameState = 'START';
+    let score = 0;
+    let frames = 0;
+    
+    // 实体对象
+    const player = { x: canvas.width/2, y: canvas.height-100, w: 40, h: 40, hp: 1 };
+    let bullets = [];      // 玩家鞭炮
+    let enemies = [];      // 小年兽
+    let enemyBullets = []; // 敌人火球
+    let particles = [];    // 爆炸粒子
+    let boss = null;
+
+    // 触摸/鼠标控制
+    let targetX = player.x;
+    let targetY = player.y;
+
+    // --- 绘图函数 ---
+    function drawPixelSprite(ctx, spriteKey, x, y, overrideScale = null, flashWhite = false) {
+        const sprite = SPRITES[spriteKey];
+        const scale = overrideScale || sprite.scale;
+        
+        // 居中绘制偏移量
+        const offsetX = x - (sprite.w * scale) / 2;
+        const offsetY = y - (sprite.h * scale) / 2;
+
+        for (let r = 0; r < sprite.h; r++) {
+            for (let c = 0; c < sprite.w; c++) {
+                const colorCode = sprite.map[r][c];
+                if (colorCode !== 0) {
+                    ctx.fillStyle = flashWhite ? '#ffffff' : sprite.colors[colorCode];
+                    ctx.fillRect(offsetX + c * scale, offsetY + r * scale, scale, scale);
+                }
+            }
+        }
+    }
+
+    // --- 游戏逻辑 ---
+    function startGame() {
+        document.getElementById('start-screen').style.display = 'none';
+        document.getElementById('boss-hp-container').style.display = 'none';
+        score = 0;
+        frames = 0;
+        bullets = [];
+        enemies = [];
+        enemyBullets = [];
+        particles = [];
+        boss = null;
+        player.hp = 1;
+        gameState = 'PLAYING';
+        document.getElementById('score').innerText = score;
+        gameLoop();
+    }
+
+    function createExplosion(x, y, color) {
+        for (let i = 0; i < 12; i++) {
+            particles.push({
+                x: x, y: y,
+                vx: (Math.random() - 0.5) * 12,
+                vy: (Math.random() - 0.5) * 12,
+                life: 40,
+                color: color
+            });
+        }
+    }
+
+    function spawnBoss() {
+        gameState = 'BOSS';
+        document.getElementById('boss-hp-container').style.display = 'block';
+        document.getElementById('boss-hp-fill').style.width = '100%';
+        document.getElementById('boss-hp-fill').style.backgroundColor = '#ff0000';
+        
+        boss = {
+            x: canvas.width / 2,
+            y: -100,
+            w: 100, // 碰撞箱大小
+            h: 100,
+            hp: 200, // Boss血量
+            maxHp: 200,
+            dir: 1,
+            moveSpeed: 2,
+            shootTimer: 0,
+            enraged: false // 狂暴状态
+        };
+    }
+
+    function gameLoop() {
+        if (gameState === 'WIN' || gameState === 'GAME_OVER') return;
+
+        // 清空画布
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 绘制星空背景
+        if (Math.random() < 0.3) {
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            ctx.fillRect(Math.random()*canvas.width, Math.random()*canvas.height, 2, 2);
+        }
+
+        // --- 玩家逻辑 ---
+        if (player.hp > 0) {
+            player.x += (targetX - player.x) * 0.15;
+            player.y += (targetY - player.y) * 0.15;
+            drawPixelSprite(ctx, 'lantern', player.x, player.y);
+
+            // 发射鞭炮 (自动)
+            if (frames % 12 === 0) {
+                bullets.push({ x: player.x, y: player.y - 20, w: 10, h: 20 });
+            }
+        }
+
+        // --- 鞭炮逻辑 ---
+        bullets.forEach((b, i) => {
+            b.y -= 12;
+            drawPixelSprite(ctx, 'firecracker', b.x, b.y);
+            if (b.y < -50) bullets.splice(i, 1);
+        });
+
+        // --- 敌人逻辑 (小年兽) ---
+        if (gameState === 'PLAYING') {
+            if (frames % 50 === 0) {
+                enemies.push({
+                    x: Math.random() * (canvas.width - 60) + 30,
+                    y: -50,
+                    w: 40, h: 40,
+                    hp: 3
+                });
+            }
+
+            enemies.forEach((e, i) => {
+                e.y += 3; // 移动速度
+                // 绘制小年兽
+                drawPixelSprite(ctx, 'nianSmall', e.x, e.y);
+
+                // 小年兽吐火球 (随机)
+                if (Math.random() < 0.02) {
+                    enemyBullets.push({
+                        x: e.x, y: e.y + 20, 
+                        vx: 0, vy: 5 // 向下
+                    });
+                }
+
+                // 被鞭炮击中
+                bullets.forEach((b, bi) => {
+                    if (Math.abs(b.x - e.x) < 30 && Math.abs(b.y - e.y) < 30) {
+                        e.hp--;
+                        bullets.splice(bi, 1);
+                        createExplosion(b.x, b.y, '#ffff00'); // 小火花
+                        if (e.hp <= 0) {
+                            enemies.splice(i, 1);
+                            createExplosion(e.x, e.y, '#00ccaa'); // 击杀特效
+                            score += 10;
+                            document.getElementById('score').innerText = score;
+                            if (score >= 100) spawnBoss();
+                        }
+                    }
+                });
+                
+                if (e.y > canvas.height) enemies.splice(i, 1);
+            });
+        }
+
+        // --- BOSS 逻辑 (大年兽) ---
+        if (gameState === 'BOSS' && boss) {
+            // 入场
+            if (boss.y < 100) boss.y += 2;
+
+            // 狂暴检测
+            if (boss.hp < boss.maxHp * 0.5 && !boss.enraged) {
+                boss.enraged = true;
+                boss.moveSpeed = 5; // 速度变快
+                createExplosion(boss.x, boss.y, 'white'); // 狂暴特效
+                document.getElementById('boss-hp-fill').style.backgroundColor = '#ffffff'; // 血条变白
+            }
+
+            // 移动
+            boss.x += boss.moveSpeed * boss.dir;
+            if (boss.x < 50 || boss.x > canvas.width - 50) boss.dir *= -1;
+
+            // 绘制 BOSS (受伤闪白)
+            let flash = boss.enraged && (frames % 10 < 5); 
+            drawPixelSprite(ctx, 'nianBig', boss.x, boss.y, null, flash);
+
+            // BOSS 攻击 (普通 vs 狂暴)
+            boss.shootTimer++;
+            let shootThreshold = boss.enraged ? 20 : 60; // 狂暴射速快3倍
+            
+            if (boss.shootTimer > shootThreshold) {
+                boss.shootTimer = 0;
+                // 发射3个火球
+                enemyBullets.push({ x: boss.x, y: boss.y + 50, vx: 0, vy: 6 });
+                enemyBullets.push({ x: boss.x, y: boss.y + 50, vx: -3, vy: 5 });
+                enemyBullets.push({ x: boss.x, y: boss.y + 50, vx: 3, vy: 5 });
+            }
+
+            // BOSS 碰撞
+            bullets.forEach((b, bi) => {
+                if (Math.abs(b.x - boss.x) < 60 && Math.abs(b.y - boss.y) < 50) {
+                    boss.hp--;
+                    bullets.splice(bi, 1);
+                    createExplosion(b.x, b.y, '#ff0000');
+                    
+                    // 更新血条UI
+                    let pct = (boss.hp / boss.maxHp) * 100;
+                    document.getElementById('boss-hp-fill').style.width = pct + '%';
+
+                    if (boss.hp <= 0) {
+                        // 胜利
+                        gameState = 'WIN';
+                        boss = null;
+                        document.getElementById('boss-hp-container').style.display = 'none';
+                        document.getElementById('ui-layer').style.display = 'none';
+                        document.getElementById('end-screen').style.display = 'flex';
+                        launchFireworks();
+                    }
+                }
+            });
+        }
+
+        // --- 敌方火球逻辑 ---
+        enemyBullets.forEach((eb, i) => {
+            eb.x += eb.vx;
+            eb.y += eb.vy;
+            drawPixelSprite(ctx, 'fireball', eb.x, eb.y);
+            
+            // 击中玩家判定
+            if (player.hp > 0 && Math.abs(eb.x - player.x) < 20 && Math.abs(eb.y - player.y) < 20) {
+                // 简单处理：玩家不会死，只会产生被击中效果，稍微扣分或者仅仅是特效
+                // 为了游戏体验，我们这里只做击中特效，不让玩家输，毕竟是过年游戏
+                createExplosion(player.x, player.y, 'red');
+                enemyBullets.splice(i, 1);
+            }
+
+            if (eb.y > canvas.height) enemyBullets.splice(i, 1);
+        });
+
+        // --- 粒子特效 ---
+        particles.forEach((p, i) => {
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life--;
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x, p.y, 4, 4);
+            if (p.life <= 0) particles.splice(i, 1);
+        });
+
+        frames++;
+        if (gameState !== 'WIN') requestAnimationFrame(gameLoop);
+    }
+
+    // --- 胜利烟花 ---
+    function launchFireworks() {
+        const loop = () => {
+            ctx.fillStyle = 'rgba(0,0,0,0.1)';
+            ctx.fillRect(0,0,canvas.width, canvas.height);
+            
+            if (Math.random() < 0.1) {
+                createExplosion(Math.random()*canvas.width, Math.random()*canvas.height/2, 
+                    ['#f00','#0f0','#ff0','#0ff'][Math.floor(Math.random()*4)]);
+            }
+            
+            particles.forEach((p, i) => {
+                p.x += p.vx; p.y += p.vy; p.life--;
+                ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4, 4);
+                if(p.life<=0) particles.splice(i,1);
+            });
+            requestAnimationFrame(loop);
+        };
+        loop();
+    }
+
+    // --- 输入事件 ---
+    canvas.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        targetX = e.touches[0].clientX;
+        targetY = e.touches[0].clientY;
+    }, { passive: false });
+    
+    canvas.addEventListener('mousemove', (e) => {
+        targetX = e.clientX;
+        targetY = e.clientY;
+    });
+
+</script>
+</body>
+</html>
